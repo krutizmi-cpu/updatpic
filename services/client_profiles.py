@@ -27,7 +27,7 @@ DEFAULT_CLIENT_PROFILES = {
         "label": "Детский Мир",
         "file_name_template": "{client_code}_{index}",
         "allowed_extensions": ["jpg", "jpeg", "png", "webp"],
-        "max_file_size_mb": 1,
+        "max_file_size_mb": 10,
         "min_long_side_px": 1000,
         "max_long_side_px": 8000,
         "max_images": 30,
@@ -36,7 +36,7 @@ DEFAULT_CLIENT_PROFILES = {
         "client_code_label": "Штрихкод товара",
         "notes": [
             "Для массовой загрузки имя файла должно быть в формате штрихкод_номер-фото.",
-            "Поддерживаются jpg, png и webp; размер файла должен быть до 1 МБ.",
+            "Поддерживаются jpg, png и webp; размер файла должен быть до 10 МБ.",
             "Порядок фото задаётся именем файла, прямые ссылки можно давать списком.",
         ],
         "source_reference": "https://help.detmir.market/edit-media",
