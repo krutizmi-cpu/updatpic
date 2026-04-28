@@ -1,0 +1,41 @@
+{
+  "sportmaster": {
+    "label": "Спортмастер",
+    "file_name_template": "{client_code}_{index}",
+    "allowed_extensions": [
+      "jpg",
+      "jpeg",
+      "png"
+    ],
+    "max_file_size_mb": 50,
+    "index_padding": 1,
+    "requires_client_code": true,
+    "client_code_label": "Код цветомодели",
+    "notes": [
+      "Фото должны соответствовать требованиям модерации Спортмастера.",
+      "На фото не должно быть ссылок, водяных знаков и постороннего ассортимента."
+    ],
+    "source_reference": "https://seller-help.sportmaster.ru/pages/viewpage.action?pageId=48365664"
+  },
+  "detmir": {
+    "label": "Детский Мир",
+    "file_name_template": "{client_code}_{index}",
+    "allowed_extensions": [
+      "jpg",
+      "jpeg",
+      "png",
+      "webp"
+    ],
+    "max_file_size_mb": 10,
+    "min_long_side_px": 1000,
+    "max_long_side_px": 8000,
+    "index_padding": 2,
+    "requires_client_code": true,
+    "client_code_label": "Штрихкод товара",
+    "notes": [
+      "Для массовой загрузки имя файла должно быть в формате штрихкод_номер-фото.",
+      "Фото на белом фоне предпочтительны, интерьерные кадры не должны идти первыми."
+    ],
+    "source_reference": "https://help.detmir.market/edit-media"
+  }
+}
