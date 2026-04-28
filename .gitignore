@@ -3,9 +3,12 @@ __pycache__/
 .streamlit/
 .venv/
 venv/
+node_modules/
+scripts_tmp*.mjs
 data/*.db
 media/*
 !media/.gitkeep
 exports/*
 !exports/.gitkeep
+templates/*.tmp
 *.pyc

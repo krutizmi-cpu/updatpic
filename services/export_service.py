@@ -5,7 +5,6 @@ import io
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
 import pandas as pd
@@ -16,13 +15,20 @@ from services.client_profiles import get_client_profile
 
 
 CLIENT_MAPPING_ALIASES = {
-    "article": ("article", "артикул", "sku"),
+    "article": ("article", "артикул", "артикул товара", "sku"),
     "client_code": (
         "client_code",
+        "client code",
         "код клиента",
         "код цветомодели",
+        "код цветомодели ",
+        "код цветовой модели",
+        "код модели цвета",
+        "цветомодель",
         "штрихкод",
         "штрих-код",
+        "штрихкод товара",
+        "штрих-код товара",
         "barcode",
     ),
 }
@@ -38,7 +44,10 @@ class ExportRowResult:
 
 
 def normalize_mapping_headers(columns: list[str]) -> dict[str, str]:
-    lowered = {column.strip().lower(): column for column in columns}
+    lowered = {
+        str(column).strip().lower().replace("\n", " ").replace("\r", " "): column
+        for column in columns
+    }
     renamed: dict[str, str] = {}
     for target, aliases in CLIENT_MAPPING_ALIASES.items():
         for alias in aliases:
@@ -52,7 +61,10 @@ def normalize_mapping_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     renamed = dataframe.rename(columns=normalize_mapping_headers(list(dataframe.columns)))
     for required in ("article", "client_code"):
         if required not in renamed.columns:
-            raise ValueError(f"Не найдена колонка {required}")
+            raise ValueError(
+                f"Не найдена колонка {required}. Ожидаются заголовки `article` и `client_code` "
+                "или их русские аналоги."
+            )
     prepared = renamed[["article", "client_code"]].copy()
     prepared["article"] = prepared["article"].astype(str).str.strip()
     prepared["client_code"] = prepared["client_code"].astype(str).str.strip()

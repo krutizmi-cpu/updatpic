@@ -5,6 +5,7 @@
 ## Что уже умеет стартовая версия
 
 - Принимать Excel/CSV с товарами.
+- Отдавать готовые Excel-шаблоны для менеджера и клиента.
 - Искать фото в таком порядке:
   1. прямые ссылки из файла;
   2. изображения на странице товара поставщика;
@@ -79,8 +80,33 @@
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+node scripts/build_templates.mjs
 streamlit run app.py
 ```
+
+## Готовые шаблоны Excel
+
+После запуска генератора шаблоны лежат здесь:
+
+- `templates/manager_import_template.xlsx`
+- `templates/client_mapping_template.xlsx`
+- `templates/sportmaster_upload_template.xlsx`
+- `templates/detmir_upload_template.xlsx`
+
+Что внутри:
+
+- `manager_import_template.xlsx`:
+  рабочий лист `Менеджер` с заголовками в первой строке, файл можно сразу заполнять и загружать обратно в UpdatPic;
+  лист `Как использовать` с подсказками по полям.
+- `client_mapping_template.xlsx`:
+  рабочий лист `Клиент` с колонками `article` и `client_code`;
+  лист `Как использовать` с примерами под Спортмастер и Детский Мир.
+- `sportmaster_upload_template.xlsx`:
+  рабочий лист `Спортмастер` с колонками `article` и `Код цветомодели`;
+  лист `Как загружать` с примером итоговых имён файлов `КодЦветомодели_1`.
+- `detmir_upload_template.xlsx`:
+  рабочий лист `Детский Мир` с колонками `article` и `Штрихкод товара`;
+  лист `Как загружать` с примером итоговых имён файлов `Штрихкод_01`.
 
 ## Структура проекта
 
@@ -89,6 +115,8 @@ app.py
 config.py
 db.py
 requirements.txt
+scripts/
+  build_templates.mjs
 services/
   catalog.py
   client_profiles.py
@@ -98,6 +126,7 @@ services/
 data/
 media/
 exports/
+templates/
 ```
 
 ## Важные ограничения текущей версии

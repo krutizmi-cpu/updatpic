@@ -6,11 +6,11 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from config import CLIENT_PROFILES_PATH, DB_PATH, EXPORTS_DIR, MEDIA_DIR, ensure_directories
+from config import CLIENT_PROFILES_PATH, DB_PATH, EXPORTS_DIR, MEDIA_DIR, TEMPLATES_DIR, ensure_directories
 from db import fetch_product_images, fetch_products, init_db
-from services.catalog import load_dataframe, normalize_catalog_dataframe
+from services.catalog import REQUIRED_COLUMNS, load_best_matching_dataframe, load_dataframe, normalize_catalog_dataframe
 from services.client_profiles import load_client_profiles
-from services.export_service import build_client_export, normalize_mapping_dataframe
+from services.export_service import CLIENT_MAPPING_ALIASES, build_client_export, normalize_mapping_dataframe
 from services.photo_pipeline import ingest_and_collect
 
 
@@ -34,6 +34,7 @@ def render_sidebar() -> None:
     st.sidebar.write(f"Медиа: `{MEDIA_DIR}`")
     st.sidebar.write(f"Профили клиентов: `{CLIENT_PROFILES_PATH}`")
     st.sidebar.write(f"Архивы: `{EXPORTS_DIR}`")
+    st.sidebar.write(f"Шаблоны: `{TEMPLATES_DIR}`")
     st.sidebar.divider()
     st.sidebar.subheader("Клиенты")
     for key, profile in profiles.items():
@@ -44,12 +45,31 @@ def render_sidebar() -> None:
         )
 
 
+def render_template_download(template_name: str, label: str, help_text: str) -> None:
+    template_path = TEMPLATES_DIR / template_name
+    if not template_path.exists():
+        st.warning(f"Шаблон `{template_name}` не найден. Сначала сгенерируйте его через `node scripts/build_templates.mjs`.")
+        return
+    st.download_button(
+        label=label,
+        data=template_path.read_bytes(),
+        file_name=template_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help=help_text,
+    )
+
+
 def render_catalog_tab() -> None:
     st.subheader("Поиск и сохранение фото")
     st.write(
         "Загрузите Excel/CSV менеджера с товарами. Поддерживаются поля: "
         "`артикул`, `название`, `шт`, `сайт`, `артикул поставщика`, "
         "`ссылка на товар`, `картинки`."
+    )
+    render_template_download(
+        "manager_import_template.xlsx",
+        "Скачать шаблон менеджера",
+        "Готовый Excel для загрузки товаров и поиска фото.",
     )
 
     file = st.file_uploader(
@@ -59,8 +79,20 @@ def render_catalog_tab() -> None:
     )
 
     if file:
-        dataframe = load_dataframe(file.name, file.getvalue())
-        prepared = normalize_catalog_dataframe(dataframe)
+        try:
+            dataframe, sheet_name = load_best_matching_dataframe(
+                file.name,
+                file.getvalue(),
+                {**REQUIRED_COLUMNS},
+            )
+            prepared = normalize_catalog_dataframe(dataframe)
+        except ValueError as exc:
+            st.error(f"Не удалось разобрать файл товаров: {exc}")
+            st.info("Проверьте, что в файле есть колонки `article` и `name` или их русские аналоги.")
+            return
+
+        if sheet_name != file.name:
+            st.caption(f"Использован лист Excel: `{sheet_name}`")
         st.dataframe(prepared, use_container_width=True)
 
         limit = st.slider("Сколько фото максимум сохранять на товар", 1, 20, 10)
@@ -119,6 +151,24 @@ def render_catalog_tab() -> None:
 def render_clients_tab() -> None:
     profiles = load_client_profiles()
     st.subheader("Клиентские выгрузки")
+    render_template_download(
+        "client_mapping_template.xlsx",
+        "Скачать шаблон клиента",
+        "Готовый Excel для сопоставления артикула и кода клиента.",
+    )
+    template_col_1, template_col_2 = st.columns(2)
+    with template_col_1:
+        render_template_download(
+            "sportmaster_upload_template.xlsx",
+            "Шаблон Спортмастер",
+            "Excel-шаблон с колонкой `Код цветомодели` и памяткой по формату Спортмастера.",
+        )
+    with template_col_2:
+        render_template_download(
+            "detmir_upload_template.xlsx",
+            "Шаблон Детский Мир",
+            "Excel-шаблон с колонкой `Штрихкод товара` и памяткой по формату Детского Мира.",
+        )
     client_key = st.selectbox(
         "Клиент",
         options=list(profiles.keys()),
@@ -137,7 +187,23 @@ def render_clients_tab() -> None:
     if not file:
         return
 
-    mapping_df = normalize_mapping_dataframe(load_dataframe(file.name, file.getvalue()))
+    try:
+        dataframe, sheet_name = load_best_matching_dataframe(
+            file.name,
+            file.getvalue(),
+            CLIENT_MAPPING_ALIASES,
+        )
+        mapping_df = normalize_mapping_dataframe(dataframe)
+    except ValueError as exc:
+        st.error(f"Не удалось разобрать клиентский файл: {exc}")
+        st.info(
+            "Ожидаются колонки `article` и `client_code`. "
+            "Если это Excel с несколькими листами, сервис попробует выбрать лучший лист автоматически."
+        )
+        return
+
+    if sheet_name != file.name:
+        st.caption(f"Использован лист Excel: `{sheet_name}`")
     st.dataframe(mapping_df, use_container_width=True)
 
     if st.button("Собрать архив для клиента", type="primary"):
