@@ -12,11 +12,10 @@ from services.catalog import REQUIRED_COLUMNS, load_best_matching_dataframe, nor
 from services.client_profiles import load_client_profiles
 from services.export_service import (
     CLIENT_UPLOAD_ALIASES,
-    build_catalog_export_from_upload,
+    build_client_export_from_upload,
     filter_upload_rows_for_client,
     normalize_client_upload_dataframe,
 )
-from services.link_export import build_marketplace_link_export
 from services.photo_pipeline import ingest_and_collect
 
 
@@ -217,7 +216,8 @@ def render_clients_tab() -> None:
     st.info(
         "Один файл клиента поддерживает два режима: `каталог` и `ссылки`. "
         "Если фото уже спарсены в UpdatPic, заполните артикул и код клиента. "
-        "Если ссылки уже есть, заполните код клиента и колонку со ссылками."
+        "Если ссылки уже есть, заполните код клиента и колонку со ссылками. "
+        "На выходе сервис собирает один ZIP-архив с готовыми файлами."
     )
 
     file = st.file_uploader(
@@ -255,40 +255,18 @@ def render_clients_tab() -> None:
     )
 
     if st.button("Подготовить выгрузку клиента", type="primary"):
-        catalog_artifacts = build_catalog_export_from_upload(client_key, upload_df)
-        link_rows = upload_df[upload_df["source_mode"] == "links"][
-            ["article", "client_code", "image_urls_raw"]
-        ].reset_index(drop=True)
-
-        link_excel_bytes: bytes | None = None
-        link_report_df = pd.DataFrame()
-        if not link_rows.empty:
-            link_excel_bytes, link_report_df = build_marketplace_link_export(client_key, link_rows)
-
-        combined_rows: list[dict[str, object]] = []
-        for row in catalog_artifacts.catalog_report_rows:
-            combined_rows.append(
-                {
-                    "source_mode": "catalog",
-                    "article": row.article,
-                    "client_code": row.client_code,
-                    "status": row.status,
-                    "message": row.message,
-                    "exported_files": row.exported_files,
-                }
-            )
-        if not link_report_df.empty:
-            for _, row in link_report_df.iterrows():
-                combined_rows.append(
-                    {
-                        "source_mode": "links",
-                        "article": row.get("article", ""),
-                        "client_code": row["client_code"],
-                        "status": row["status"],
-                        "message": row["message"],
-                        "exported_files": row["link_count"],
-                    }
-                )
+        zip_bytes, report_rows = build_client_export_from_upload(client_key, upload_df)
+        combined_rows = [
+            {
+                "source_mode": upload_df.iloc[index]["source_mode"] if index < len(upload_df.index) else "",
+                "article": row.article,
+                "client_code": row.client_code,
+                "status": row.status,
+                "message": row.message,
+                "exported_files": row.exported_files,
+            }
+            for index, row in enumerate(report_rows)
+        ]
 
         if combined_rows:
             st.success("Выгрузка подготовлена.")
@@ -296,23 +274,13 @@ def render_clients_tab() -> None:
         else:
             st.warning("В файле не нашлось строк для выгрузки.")
 
-        download_columns = st.columns(2)
-        with download_columns[0]:
-            if catalog_artifacts.catalog_zip_bytes:
-                st.download_button(
-                    label="Скачать ZIP с локальными фото",
-                    data=catalog_artifacts.catalog_zip_bytes,
-                    file_name=f"{client_key}_photos.zip",
-                    mime="application/zip",
-                )
-        with download_columns[1]:
-            if link_excel_bytes:
-                st.download_button(
-                    label="Скачать Excel со ссылками",
-                    data=link_excel_bytes,
-                    file_name=f"{client_key}_ready_links.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+        if zip_bytes:
+            st.download_button(
+                label="Скачать ZIP архива фото",
+                data=zip_bytes,
+                file_name=f"{client_key}_photos.zip",
+                mime="application/zip",
+            )
 
 
 def main() -> None:

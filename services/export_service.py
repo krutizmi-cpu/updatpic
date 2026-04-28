@@ -4,15 +4,25 @@ import csv
 import io
 import zipfile
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import pandas as pd
 from PIL import Image
+import requests
 
 from db import fetch_product_by_article, fetch_product_images
 from services.client_profiles import get_client_profile
+from services.image_search import (
+    infer_extension,
+    parse_direct_image_urls,
+    request_headers,
+    resolve_download_url,
+    split_reference_urls,
+)
 
 
 CLIENT_MAPPING_ALIASES = {
@@ -238,6 +248,49 @@ def build_client_export(client_key: str, mapping_df: pd.DataFrame) -> tuple[byte
     return output.getvalue(), report_rows
 
 
+def build_client_export_from_upload(
+    client_key: str,
+    upload_df: pd.DataFrame,
+) -> tuple[bytes, list[ExportRowResult]]:
+    profile = get_client_profile(client_key)
+    report_rows: list[ExportRowResult] = []
+    output = io.BytesIO()
+
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for _, row in upload_df.iterrows():
+            article = str(row.get("article", "")).strip()
+            client_code = str(row["client_code"]).strip()
+            source_mode = str(row["source_mode"]).strip()
+            raw_urls = str(row.get("image_urls_raw", "")).strip()
+
+            if source_mode == "links":
+                exported_files, message, status = export_link_row_to_archive(
+                    archive,
+                    profile,
+                    article,
+                    client_code,
+                    raw_urls,
+                )
+                report_rows.append(
+                    ExportRowResult(article, client_code, status, message, exported_files)
+                )
+                continue
+
+            exported_files, message, status = export_catalog_row_to_archive(
+                archive,
+                profile,
+                article,
+                client_code,
+            )
+            report_rows.append(
+                ExportRowResult(article, client_code, status, message, exported_files)
+            )
+
+        archive.writestr("report.csv", export_report_csv(report_rows))
+
+    return output.getvalue(), report_rows
+
+
 def build_catalog_export_from_upload(
     client_key: str,
     upload_df: pd.DataFrame,
@@ -281,7 +334,173 @@ def build_client_file_name(profile: dict[str, Any], client_code: str, index: int
     padding = int(profile.get("index_padding", 1))
     index_value = str(index).zfill(padding)
     file_stem = profile["file_name_template"].format(client_code=client_code, index=index_value)
-    return f"{file_stem}.{extension}"
+    folder_name = sanitize_archive_component(client_code)
+    return f"{folder_name}/{file_stem}.{extension}"
+
+
+def sanitize_archive_component(value: str) -> str:
+    sanitized = re.sub(r'[<>:"/\\|?*]+', "_", value.strip())
+    return sanitized or "item"
+
+
+def export_catalog_row_to_archive(
+    archive: zipfile.ZipFile,
+    profile: dict[str, Any],
+    article: str,
+    client_code: str,
+) -> tuple[int, str, str]:
+    product = fetch_product_by_article(article)
+    if not product:
+        return 0, "Товар не найден в локальной базе", "error"
+
+    images = fetch_product_images(product["id"])
+    if not images:
+        return 0, "У товара нет сохранённых изображений", "error"
+
+    max_images = int(profile.get("max_images", len(images)))
+    exported_files = 0
+    row_warnings: list[str] = []
+    for index, image in enumerate(images[:max_images], start=1):
+        file_path = Path(image["local_path"])
+        if not file_path.exists():
+            continue
+        file_bytes, extension, warnings = prepare_image_for_client(file_path, profile)
+        file_name = build_client_file_name(profile, client_code, index, extension)
+        archive.writestr(file_name, file_bytes)
+        exported_files += 1
+        row_warnings.extend(warnings)
+
+    if row_warnings:
+        return exported_files, "; ".join(dict.fromkeys(row_warnings)), "ok" if exported_files else "warning"
+    return exported_files, "OK" if exported_files else "Нет файлов для упаковки", "ok" if exported_files else "warning"
+
+
+def export_link_row_to_archive(
+    archive: zipfile.ZipFile,
+    profile: dict[str, Any],
+    article: str,
+    client_code: str,
+    raw_urls: str,
+) -> tuple[int, str, str]:
+    row_warnings: list[str] = []
+    candidates = collect_link_candidates(raw_urls, row_warnings)
+    if not candidates:
+        message = "; ".join(dict.fromkeys(row_warnings)) if row_warnings else "Не удалось получить изображения из указанных ссылок"
+        return 0, message, "warning"
+
+    max_images = int(profile.get("max_images", len(candidates)))
+    exported_files = 0
+
+    for index, candidate in enumerate(candidates[:max_images], start=1):
+        try:
+            file_bytes, extension, warnings = prepare_remote_image_for_client(candidate.source_url, profile)
+        except requests.RequestException as exc:
+            row_warnings.append(f"Не удалось скачать фото {index}: {exc}")
+            continue
+        except OSError:
+            row_warnings.append(f"Ссылка {index} не содержит корректное изображение")
+            continue
+
+        file_name = build_client_file_name(profile, client_code, index, extension)
+        archive.writestr(file_name, file_bytes)
+        exported_files += 1
+        row_warnings.extend(warnings)
+
+    if not exported_files:
+        message = "; ".join(dict.fromkeys(row_warnings)) if row_warnings else "Не удалось скачать ни одного фото"
+        return 0, message, "warning"
+
+    if row_warnings:
+        return exported_files, "; ".join(dict.fromkeys(row_warnings)), "ok"
+    return exported_files, "OK", "ok"
+
+
+def collect_link_candidates(raw_urls: str, row_warnings: list[str]) -> list[Any]:
+    candidates: list[Any] = []
+    seen_urls: set[str] = set()
+    for url in split_reference_urls(raw_urls):
+        if is_generic_image_search_url(url):
+            row_warnings.append("Ссылки из общих поисковиков по картинкам пропущены: используйте прямые URL или страницы поставщика.")
+            continue
+        for candidate in parse_direct_image_urls(url):
+            if candidate.source_url in seen_urls:
+                continue
+            seen_urls.add(candidate.source_url)
+            candidates.append(candidate)
+    return candidates
+
+
+def is_generic_image_search_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    return (
+        ("yandex." in host and path.startswith("/images/search"))
+        or ("google." in host and "/search" in path)
+        or ("bing.com" in host and "/images/search" in path)
+        or ("duckduckgo.com" in host and path.startswith("/"))
+    )
+
+
+def prepare_remote_image_for_client(
+    source_url: str,
+    profile: dict[str, Any],
+) -> tuple[bytes, str, list[str]]:
+    download_url = resolve_download_url(source_url)
+    response = download_remote_response(download_url, source_url)
+    content = response.content
+    content_type = response.headers.get("Content-Type")
+
+    extension = infer_extension(source_url, content_type, content)
+    with Image.open(BytesIO(content)) as image:
+        warnings: list[str] = []
+        allowed_extensions = {ext.lower() for ext in profile.get("allowed_extensions", ["jpg"])}
+        target_extension = extension if extension in allowed_extensions else (
+            "jpg" if "jpg" in allowed_extensions else sorted(allowed_extensions)[0]
+        )
+
+        working_image = image.convert("RGB") if target_extension in {"jpg", "jpeg"} else image.copy()
+        long_side = max(working_image.size)
+        min_long_side = profile.get("min_long_side_px")
+        max_long_side = profile.get("max_long_side_px")
+        if min_long_side and long_side < min_long_side:
+            warnings.append(f"Изображение меньше рекомендуемой длинной стороны {min_long_side}px")
+        if max_long_side and long_side > max_long_side:
+            working_image.thumbnail((max_long_side, max_long_side))
+
+        max_file_size_mb = profile.get("max_file_size_mb")
+        max_file_size_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else None
+        file_bytes, final_extension = serialize_image_for_client(
+            working_image,
+            target_extension,
+            allowed_extensions,
+            max_file_size_bytes,
+        )
+        if max_file_size_bytes and len(file_bytes) > max_file_size_bytes:
+            warnings.append(f"Файл превышает лимит {max_file_size_mb} МБ")
+        return file_bytes, final_extension, warnings
+
+
+def download_remote_response(download_url: str, source_url: str) -> requests.Response:
+    response = requests.get(download_url, headers=request_headers(), timeout=20)
+    try:
+        response.raise_for_status()
+        return response
+    except requests.HTTPError:
+        if response.status_code != 403:
+            raise
+
+    parsed = urlparse(source_url)
+    referer = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else source_url
+    headers = {
+        **request_headers(),
+        "Referer": referer,
+        "Origin": f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else referer,
+    }
+    retry_response = requests.get(download_url, headers=headers, timeout=20)
+    retry_response.raise_for_status()
+    return retry_response
+
 
 
 def prepare_image_for_client(file_path: Path, profile: dict[str, Any]) -> tuple[bytes, str, list[str]]:
