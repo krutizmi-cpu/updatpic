@@ -17,6 +17,8 @@ from config import DEFAULT_USER_AGENT, MEDIA_DIR, ensure_directories
 
 
 IMAGE_PATTERN = re.compile(r"\.(?:jpg|jpeg|png|webp)(?:$|\?)", re.IGNORECASE)
+QUOTED_ASSET_PATTERN = re.compile(r'"((?:\\/|[^"])*)"', re.IGNORECASE)
+REQUEST_TIMEOUT_SECONDS = 8
 
 
 @dataclass
@@ -64,8 +66,16 @@ def collect_candidate_images(product: dict) -> list[CandidateImage]:
     supplier_site = product.get("supplier_site") or ""
     article = product.get("supplier_article") or product.get("article") or ""
     name = product.get("name") or ""
+    normalized_supplier_site = normalize_supplier_site(supplier_site)
+
+    if not candidates and normalized_supplier_site and article:
+        for search_url in build_supplier_search_urls(normalized_supplier_site, article):
+            candidates.extend(extract_images_from_page(search_url, source="supplier_search"))
+            if candidates:
+                break
+
     if supplier_site and article:
-        search_pages = search_web_pages(normalize_supplier_site(supplier_site), article, name)
+        search_pages = search_web_pages(normalized_supplier_site, article, name)
         for page_url in search_pages:
             candidates.extend(extract_images_from_page(page_url, source="search_page"))
 
@@ -74,7 +84,7 @@ def collect_candidate_images(product: dict) -> list[CandidateImage]:
         for page_url in search_pages:
             candidates.extend(extract_images_from_page(page_url, source="internet_page"))
 
-    return deduplicate_candidates(candidates)
+    return prioritize_candidates(deduplicate_candidates(candidates))
 
 
 def deduplicate_candidates(candidates: Iterable[CandidateImage]) -> list[CandidateImage]:
@@ -89,6 +99,37 @@ def deduplicate_candidates(candidates: Iterable[CandidateImage]) -> list[Candida
     return unique
 
 
+def prioritize_candidates(candidates: list[CandidateImage]) -> list[CandidateImage]:
+    indexed = list(enumerate(candidates))
+    indexed.sort(key=lambda item: candidate_priority(item[1], item[0]))
+    return [candidate for _, candidate in indexed]
+
+
+def candidate_priority(candidate: CandidateImage, original_index: int) -> tuple[int, int, int]:
+    if candidate.source == "provided":
+        return (0, 0, original_index)
+    return (1, discovery_candidate_score(candidate.source_url), original_index)
+
+
+def discovery_candidate_score(url: str) -> int:
+    lowered = url.lower()
+    if "/linkpics/" in lowered or "/gallery/" in lowered:
+        return 0
+    if "/products/" in lowered or "/product/" in lowered:
+        return 1
+    if "/resize_cache/" in lowered:
+        return 2
+    if lowered.endswith((".jpg", ".jpeg", ".webp")):
+        return 3
+    if "/local/frontend/" in lowered:
+        return 100
+    if "/upload/iblock/" in lowered and lowered.endswith(".png"):
+        return 90
+    if any(token in lowered for token in ("/logo", "/icon", "/sprite", "/banner", "/brand/")):
+        return 95
+    return 10
+
+
 def search_web_pages(supplier_site: str, article: str, name: str, limit: int = 3) -> list[str]:
     query_parts = [article]
     if name:
@@ -99,7 +140,7 @@ def search_web_pages(supplier_site: str, article: str, name: str, limit: int = 3
     url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
 
     try:
-        response = requests.get(url, headers=request_headers(), timeout=20)
+        response = requests.get(url, headers=request_headers(), timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
     except requests.RequestException:
         return []
@@ -128,6 +169,16 @@ def normalize_supplier_site(raw_value: str) -> str:
     return parsed.netloc or value
 
 
+def build_supplier_search_urls(supplier_site: str, article: str) -> list[str]:
+    base = f"https://{supplier_site}"
+    encoded_article = quote_plus(article)
+    return [
+        f"{base}/search/?q={encoded_article}",
+        f"{base}/sitesearch.html?query={encoded_article}",
+        f"{base}/search/?query={encoded_article}",
+    ]
+
+
 def is_probable_image_url(url: str) -> bool:
     return bool(IMAGE_PATTERN.search(url))
 
@@ -139,7 +190,7 @@ def is_yandex_disk_public_url(url: str) -> bool:
 
 def extract_images_from_page(url: str, source: str) -> list[CandidateImage]:
     try:
-        response = requests.get(url, headers=request_headers(), timeout=20)
+        response = requests.get(url, headers=request_headers(), timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
     except requests.RequestException:
         return []
@@ -158,10 +209,45 @@ def extract_images_from_page(url: str, source: str) -> list[CandidateImage]:
         if not raw_url:
             continue
         absolute_url = urljoin(url, raw_url)
-        if IMAGE_PATTERN.search(absolute_url):
+        if IMAGE_PATTERN.search(absolute_url) and looks_like_product_image_url(absolute_url):
             candidates.append(CandidateImage(source=source, source_url=absolute_url))
 
+    candidates.extend(extract_images_from_scripts(response.text, url, source))
+
     return candidates
+
+
+def extract_images_from_scripts(page_text: str, page_url: str, source: str) -> list[CandidateImage]:
+    candidates: list[CandidateImage] = []
+    for match in QUOTED_ASSET_PATTERN.findall(page_text):
+        candidate = match.replace("\\/", "/").strip()
+        if not candidate:
+            continue
+        absolute_url = urljoin(page_url, candidate)
+        if not IMAGE_PATTERN.search(absolute_url):
+            continue
+        if not looks_like_product_image_url(absolute_url):
+            continue
+        candidates.append(CandidateImage(source=source, source_url=absolute_url))
+    preferred = [
+        candidate
+        for candidate in candidates
+        if any(token in candidate.source_url.lower() for token in ("/linkpics/", "/gallery/", "/products/", "/product/"))
+    ]
+    return preferred or candidates
+
+
+def looks_like_product_image_url(url: str) -> bool:
+    lowered = url.lower()
+    if "/local/frontend/" in lowered:
+        return False
+    if any(token in lowered for token in ("/linkpics/", "/gallery/", "/products/", "/product/", "/resize_cache/")):
+        return True
+    if "/upload/iblock/" in lowered and lowered.endswith(".png"):
+        return False
+    if any(token in lowered for token in ("/logo", "/icon", "/sprite", "/banner", "/brand/")):
+        return False
+    return True
 
 
 def download_candidate_images(product_id: int, candidates: list[CandidateImage], limit: int = 10) -> list[DownloadedImage]:
@@ -182,7 +268,7 @@ def download_candidate_images(product_id: int, candidates: list[CandidateImage],
 
 def download_image(product_dir: Path, candidate: CandidateImage, index: int) -> DownloadedImage:
     download_url = resolve_download_url(candidate.source_url)
-    response = requests.get(download_url, headers=request_headers(), timeout=30)
+    response = requests.get(download_url, headers=request_headers(), timeout=REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
     content_type = response.headers.get("Content-Type")
     content = response.content
@@ -248,7 +334,7 @@ def resolve_download_url(url: str) -> str:
             "https://cloud-api.yandex.net/v1/disk/public/resources/download",
             params={"public_key": url},
             headers=request_headers(),
-            timeout=20,
+            timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         payload = response.json()

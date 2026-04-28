@@ -200,25 +200,23 @@ function addSportmasterLinksTemplateSheet(workbook) {
   const sheet = workbook.worksheets.add("Ссылки Спортмастер");
   setSheetFrame(sheet);
 
-  sheet.getRange("A1:C1").values = [["article", "Код цветомодели", "Ссылки на фото"]];
-  styleTitle(sheet.getRange("A1:C1"));
+  sheet.getRange("A1:B1").values = [["Код цветомодели", "Ссылки на фото"]];
+  styleTitle(sheet.getRange("A1:B1"));
 
-  sheet.getRange("A2:C4").values = [
+  sheet.getRange("A2:B4").values = [
     [
-      "TSR-10025",
       "SM-RED-42",
       "https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_1.jpg;https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_2.jpg",
     ],
     [
-      "TSR-10026",
       "SM-BLACK-43",
       "https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_3.jpg",
     ],
-    ["", "", ""],
+    ["", ""],
   ];
-  styleExample(sheet.getRange("A2:C3"));
-  setColumnWidths(sheet, [180, 220, 700]);
-  sheet.getRange("A1:C20").format.wrapText = true;
+  styleExample(sheet.getRange("A2:B3"));
+  setColumnWidths(sheet, [220, 760]);
+  sheet.getRange("A1:B20").format.wrapText = true;
 }
 
 function addSportmasterLinksReadmeSheet(workbook) {
@@ -231,7 +229,7 @@ function addSportmasterLinksReadmeSheet(workbook) {
     ["1", "Заполнить Код цветомодели и Ссылки на фото", "Парсинг и скачивание не нужны"],
     ["2", "Вставлять только прямые открытые ссылки на jpg/jpeg/png", "Ссылка должна заканчиваться расширением"],
     ["3", "Если фото несколько, вставлять ссылки через ; без пробелов", "Порядок ссылок = порядок отображения фото"],
-    ["4", "Загрузить файл в блок Готовые ссылки без парсинга", "Сервис соберёт итоговый Excel"],
+    ["4", "Загрузить файл в блок Готовые ссылки без парсинга", "Сервис соберёт итоговый Excel под Спортмастер"],
     ["Важно", "Ссылки Яндекс Диска для Спортмастера не подходят", "Они обычно не содержат расширение файла"],
     ["Важно", "Если ссылка не прямая, сервис оставит предупреждение в отчёте", "Лучше сразу давать готовые URL на файл"],
     ["Пример", "https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_4.jpg", "Корректная прямая ссылка"],
@@ -246,25 +244,23 @@ function addDetmirLinksTemplateSheet(workbook) {
   const sheet = workbook.worksheets.add("Ссылки Детский Мир");
   setSheetFrame(sheet);
 
-  sheet.getRange("A1:C1").values = [["article", "Штрихкод товара", "Ссылки на фото"]];
-  styleTitle(sheet.getRange("A1:C1"));
+  sheet.getRange("A1:B1").values = [["Штрихкод товара", "Ссылки на фото"]];
+  styleTitle(sheet.getRange("A1:B1"));
 
-  sheet.getRange("A2:C4").values = [
+  sheet.getRange("A2:B4").values = [
     [
-      "TSR-10025",
       "4607000012345",
       "https://static.detmir.st/media_out/523/698/3698523/1500/0.jpg\nhttps://static.detmir.st/media_out/523/698/3698523/1500/1.jpg",
     ],
     [
-      "TSR-10026",
       "4607000012346",
       "https://disk.yandex.ru/d/example-public-link",
     ],
-    ["", "", ""],
+    ["", ""],
   ];
-  styleExample(sheet.getRange("A2:C3"));
-  setColumnWidths(sheet, [180, 220, 700]);
-  sheet.getRange("A1:C20").format.wrapText = true;
+  styleExample(sheet.getRange("A2:B3"));
+  setColumnWidths(sheet, [220, 760]);
+  sheet.getRange("A1:B20").format.wrapText = true;
 }
 
 function addDetmirLinksReadmeSheet(workbook) {
@@ -277,7 +273,7 @@ function addDetmirLinksReadmeSheet(workbook) {
     ["1", "Заполнить Штрихкод товара и Ссылки на фото", "Парсинг и скачивание не нужны"],
     ["2", "Можно вставлять прямые ссылки на изображения или публичные ссылки Яндекс Диска", "Несколько ссылок допускаются"],
     ["3", "Разделители: перевод строки, пробел, запятая или ;", "Сервис соберёт единый Excel-файл"],
-    ["4", "Загрузить файл в блок Готовые ссылки без парсинга", "Сервис соберёт итоговый Excel"],
+    ["4", "Загрузить файл в блок Готовые ссылки без парсинга", "Сервис соберёт итоговый Excel под Детский Мир"],
     ["Ограничение", "Максимум 30 изображений на товар", "Лишние будут отброшены с предупреждением"],
     ["Важно", "Размер каждого файла должен быть до 1 МБ", "Сервис только формирует файл со ссылками, а не пережимает удалённые файлы"],
     ["Пример", "https://static.detmir.st/media_out/523/698/3698523/1500/0.jpg", "Корректная прямая ссылка"],
