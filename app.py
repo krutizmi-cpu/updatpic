@@ -5,7 +5,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from config import CLIENT_PROFILES_PATH, DB_PATH, EXPORTS_DIR, MEDIA_DIR, TEMPLATES_DIR, ensure_directories
+from config import AI_SETTINGS_PATH, CLIENT_PROFILES_PATH, DB_PATH, EXPORTS_DIR, MEDIA_DIR, TEMPLATES_DIR, ensure_directories
+from services.ai_provider import (
+    MODEL_PRESETS,
+    check_provider_connection,
+    current_status_label,
+    load_ai_settings,
+    mask_api_key,
+    save_ai_settings,
+    update_ai_settings,
+)
 from db import fetch_product_images, fetch_products, init_db
 from services.auth import ensure_authentication, render_auth_sidebar
 from services.catalog import REQUIRED_COLUMNS, load_best_matching_dataframe, normalize_catalog_dataframe
@@ -33,11 +42,14 @@ def bootstrap() -> None:
 
 def render_sidebar(auth_state) -> None:
     profiles = load_client_profiles()
+    ai_settings = load_ai_settings()
+    ai_status_level, ai_status_label = current_status_label(ai_settings)
     st.sidebar.title("UpdatPic")
     st.sidebar.caption("Сбор, хранение и клиентская выгрузка фото.")
     st.sidebar.write(f"База: `{DB_PATH}`")
     st.sidebar.write(f"Медиа: `{MEDIA_DIR}`")
     st.sidebar.write(f"Профили клиентов: `{CLIENT_PROFILES_PATH}`")
+    st.sidebar.write(f"AI-настройки: `{AI_SETTINGS_PATH}`")
     st.sidebar.write(f"Архивы: `{EXPORTS_DIR}`")
     st.sidebar.write(f"Шаблоны: `{TEMPLATES_DIR}`")
     st.sidebar.divider()
@@ -48,6 +60,21 @@ def render_sidebar(auth_state) -> None:
             f"Код: `{key}`  \n"
             f"Имя файла: `{profile['file_name_template']}`"
         )
+    st.sidebar.divider()
+    st.sidebar.subheader("AI")
+    st.sidebar.write(f"Провайдер: `{ai_settings['provider_label']}`")
+    st.sidebar.write(f"Модель: `{ai_settings['model']}`")
+    st.sidebar.write(f"Ключ: `{mask_api_key(str(ai_settings.get('api_key', '')))}`")
+    if ai_status_level == "success":
+        st.sidebar.success(ai_status_label)
+    elif ai_status_level == "error":
+        st.sidebar.error(ai_status_label)
+    else:
+        st.sidebar.warning(ai_status_label)
+    if ai_settings.get("last_check_message"):
+        st.sidebar.caption(ai_settings["last_check_message"])
+    if ai_settings.get("last_check_at"):
+        st.sidebar.caption(f"Последняя проверка: {ai_settings['last_check_at']}")
     render_auth_sidebar(auth_state)
 
 
@@ -283,6 +310,87 @@ def render_clients_tab() -> None:
             )
 
 
+def render_ai_tab() -> None:
+    st.subheader("AI-провайдер")
+    st.write(
+        "Здесь можно подключить OpenAI-compatible провайдер, например NVIDIA NIM. "
+        "Ключ и модель сохраняются на стороне сервиса, чтобы команда сразу видела статус подключения."
+    )
+    st.warning(
+        "API key, который уже был вставлен в переписку, лучше перевыпустить у провайдера. "
+        "Я не записываю его в код репозитория."
+    )
+
+    settings = load_ai_settings()
+    status_level, status_label = current_status_label(settings)
+
+    with st.form("ai_provider_settings"):
+        model_options = MODEL_PRESETS
+        preset_index = model_options.index(settings["model"]) if settings["model"] in model_options else 0
+        preset_model = st.selectbox("Пресет модели", options=model_options, index=preset_index)
+        model_value = st.text_input("Model ID", value=settings["model"] or preset_model)
+        base_url = st.text_input("Base URL", value=settings["base_url"])
+        api_key = st.text_input("API key", value=settings.get("api_key", ""), type="password")
+        temperature = st.slider("Temperature", 0.0, 2.0, float(settings.get("temperature", 0.2)), 0.05)
+        top_p = st.slider("Top P", 0.0, 1.0, float(settings.get("top_p", 0.95)), 0.01)
+        max_tokens = st.number_input("Max tokens для теста", min_value=16, max_value=8192, value=int(settings.get("max_tokens", 128)), step=16)
+        save_clicked = st.form_submit_button("Сохранить настройки", type="primary")
+
+    if save_clicked:
+        settings = update_ai_settings(
+            base_url=base_url,
+            model=model_value or preset_model,
+            api_key=api_key,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=int(max_tokens),
+        )
+        st.success("AI-настройки сохранены.")
+        status_level, status_label = current_status_label(settings)
+
+    action_columns = st.columns(2)
+    with action_columns[0]:
+        if st.button("Проверить ключ и модель", type="primary"):
+            result = check_provider_connection(load_ai_settings())
+            if result.ok:
+                st.success(result.message)
+            else:
+                st.error(result.message)
+            settings = load_ai_settings()
+            status_level, status_label = current_status_label(settings)
+    with action_columns[1]:
+        if st.button("Сбросить последнее состояние проверки"):
+            settings = load_ai_settings()
+            settings["last_check_ok"] = None
+            settings["last_check_message"] = "Проверка сброшена вручную."
+            settings["last_check_at"] = ""
+            save_ai_settings(settings)
+            st.info("Статус проверки сброшен.")
+            settings = load_ai_settings()
+            status_level, status_label = current_status_label(settings)
+
+    if status_level == "success":
+        st.success(status_label)
+    elif status_level == "error":
+        st.error(status_label)
+    else:
+        st.warning(status_label)
+
+    st.write(f"Провайдер: `{settings['provider_label']}`")
+    st.write(f"Base URL: `{settings['base_url']}`")
+    st.write(f"Model: `{settings['model']}`")
+    st.write(f"Ключ: `{mask_api_key(str(settings.get('api_key', '')))}`")
+    if settings.get("last_check_message"):
+        st.caption(settings["last_check_message"])
+    if settings.get("last_check_at"):
+        st.caption(f"Последняя проверка: `{settings['last_check_at']}`")
+
+    st.info(
+        "Менять модель можно прямо здесь. "
+        "Автоматически подставлять новые API key система не должна: это лучше оставлять ручным действием по соображениям безопасности."
+    )
+
+
 def main() -> None:
     bootstrap()
     auth_state = ensure_authentication()
@@ -294,11 +402,13 @@ def main() -> None:
     )
     if auth_state.user:
         st.caption(f"Текущий пользователь: {auth_state.user.get('display_name') or auth_state.user.get('login')}")
-    tab_catalog, tab_clients = st.tabs(["Каталог фото", "Клиенты"])
+    tab_catalog, tab_clients, tab_ai = st.tabs(["Каталог фото", "Клиенты", "AI"])
     with tab_catalog:
         render_catalog_tab()
     with tab_clients:
         render_clients_tab()
+    with tab_ai:
+        render_ai_tab()
 
 
 if __name__ == "__main__":

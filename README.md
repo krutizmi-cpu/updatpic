@@ -8,6 +8,7 @@
 - Искать фото по прямым URL, странице поставщика, внутреннему поиску по сайту поставщика и интернет-поиску.
 - Сохранять найденные изображения локально и связывать их с артикулом.
 - Отдавать Excel-шаблоны для менеджера, Спортмастера и Детского Мира.
+- Давать в интерфейсе AI-настройки для OpenAI-compatible провайдера, например NVIDIA NIM.
 - Работать в разделе `Клиенты` по двум сценариям в одном файле:
   - `каталог`: фото уже спарсены и лежат в локальной базе;
   - `ссылки`: готовые URL уже есть, парсинг не нужен.
@@ -130,6 +131,25 @@ UPDATPIC_AUTH_SECRET=<случайный-длинный-секрет>
 - Streamlit `st.login()` работает только с OIDC-провайдерами и хранит cookie в браузере: https://docs.streamlit.io/1.43.0/develop/api-reference/user/st.login
 - Yandex ID описывает веб-вход через OAuth 2.0 `code` flow и `redirect_uri`: https://yandex.ru/dev/id/doc/en/codes/code-url
 - Информация о пользователе запрашивается через `GET https://login.yandex.ru/info` с `Authorization: OAuth <token>`: https://yandex.ru/dev/id/doc/en/user-information
+
+## AI-провайдер
+
+Во вкладке `AI` можно:
+
+- задать `base_url`
+- ввести и сохранить `API key`
+- переключить `model`
+- проверить связку `ключ + модель` и увидеть явный статус, если ключ не работает
+
+По умолчанию выставлен NVIDIA NIM с:
+
+- `base_url = https://integrate.api.nvidia.com/v1`
+- `model = deepseek-ai/deepseek-v3.2`
+
+Опорные ссылки:
+
+- NVIDIA DeepSeek V3.2 deploy page: https://build.nvidia.com/deepseek-ai/deepseek-v3_2/deploy
+- NVIDIA OpenAI-compatible chat completions endpoint: https://docs.api.nvidia.com/nim/reference/deepseek-ai-deepseek-v3_2-infer
 
 ## Структура проекта
 

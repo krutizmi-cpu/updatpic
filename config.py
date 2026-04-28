@@ -10,6 +10,7 @@ EXPORTS_DIR = BASE_DIR / "exports"
 TEMPLATES_DIR = BASE_DIR / "templates"
 DB_PATH = DATA_DIR / "updatpic.db"
 CLIENT_PROFILES_PATH = DATA_DIR / "client_profiles.json"
+AI_SETTINGS_PATH = DATA_DIR / "ai_settings.json"
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

@@ -6,6 +6,7 @@ venv/
 node_modules/
 scripts_tmp*.mjs
 data/*.db
+data/ai_settings.json
 media/*
 !media/.gitkeep
 exports/*
