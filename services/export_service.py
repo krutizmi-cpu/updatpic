@@ -5,6 +5,7 @@ import io
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -20,6 +21,7 @@ CLIENT_MAPPING_ALIASES = {
         "client_code",
         "client code",
         "код клиента",
+        "код цветомодели*",
         "код цветомодели",
         "код цветомодели ",
         "код цветовой модели",
@@ -30,8 +32,64 @@ CLIENT_MAPPING_ALIASES = {
         "штрихкод товара",
         "штрих-код товара",
         "barcode",
+        "штрихкод*",
+        "штрихкод товара*",
     ),
 }
+
+CLIENT_UPLOAD_ALIASES = {
+    **CLIENT_MAPPING_ALIASES,
+    "source_mode": (
+        "source_mode",
+        "photo_source",
+        "источник фото",
+        "режим",
+        "тип выгрузки",
+        "тип источника",
+    ),
+    "image_urls_raw": (
+        "image_urls_raw",
+        "image_urls",
+        "photo_urls",
+        "photo links",
+        "ссылки на фото",
+        "ссылка на фото",
+        "ссылки",
+        "фото",
+        "ссылки фото",
+        "url фото",
+        "ссылки на изображения товара",
+        "ссылки на изображения",
+    ),
+}
+
+CATALOG_SOURCE_ALIASES = {
+    "catalog",
+    "local",
+    "local_catalog",
+    "from_catalog",
+    "из каталога",
+    "каталог",
+    "локально",
+    "локальный каталог",
+    "спарсено",
+    "спарсила система",
+}
+
+LINK_SOURCE_ALIASES = {
+    "links",
+    "ready_links",
+    "from_links",
+    "url",
+    "urls",
+    "готовые ссылки",
+    "ссылки",
+    "из ссылок",
+    "внешние ссылки",
+}
+
+SPORTMASTER_CODE_PATTERN = re.compile(r"^[A-Z0-9 .#_+\-]+$")
+DETMIR_CODE_PATTERN = re.compile(r"^[0-9, ]+$")
 
 
 @dataclass
@@ -41,6 +99,13 @@ class ExportRowResult:
     status: str
     message: str
     exported_files: int
+
+
+@dataclass
+class ClientExportArtifacts:
+    catalog_zip_bytes: bytes | None
+    catalog_report_rows: list[ExportRowResult]
+    catalog_rows_count: int
 
 
 def normalize_mapping_headers(columns: list[str]) -> dict[str, str]:
@@ -70,6 +135,59 @@ def normalize_mapping_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     prepared["client_code"] = prepared["client_code"].astype(str).str.strip()
     prepared = prepared[(prepared["article"] != "") & (prepared["client_code"] != "")]
     return prepared.reset_index(drop=True)
+
+
+def normalize_client_upload_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+    lowered = {
+        str(column).strip().lower().replace("\n", " ").replace("\r", " "): column
+        for column in dataframe.columns
+    }
+    renamed = dataframe.rename(
+        columns={
+            original: target
+            for target, aliases in CLIENT_UPLOAD_ALIASES.items()
+            for alias in aliases
+            for normalized, original in lowered.items()
+            if alias == normalized
+        }
+    )
+
+    if "client_code" not in renamed.columns:
+        raise ValueError(
+            "Не найдена колонка client_code. Ожидается код цветомодели или штрихкод товара."
+        )
+
+    for optional_column in ("article", "source_mode", "image_urls_raw"):
+        if optional_column not in renamed.columns:
+            renamed[optional_column] = ""
+
+    prepared = renamed[["article", "client_code", "source_mode", "image_urls_raw"]].copy()
+    for column in ("article", "client_code", "source_mode", "image_urls_raw"):
+        prepared[column] = prepared[column].fillna("").astype(str).str.strip()
+
+    prepared["source_mode"] = prepared.apply(infer_source_mode, axis=1)
+    prepared = prepared[prepared["client_code"] != ""]
+    prepared = prepared[
+        (
+            (prepared["source_mode"] == "catalog") & (prepared["article"] != "")
+        )
+        | (
+            (prepared["source_mode"] == "links") & (prepared["image_urls_raw"] != "")
+        )
+    ]
+    return prepared.reset_index(drop=True)
+
+
+def infer_source_mode(row: pd.Series) -> str:
+    raw_source = str(row.get("source_mode", "")).strip().lower()
+    if raw_source in LINK_SOURCE_ALIASES:
+        return "links"
+    if raw_source in CATALOG_SOURCE_ALIASES:
+        return "catalog"
+
+    if str(row.get("image_urls_raw", "")).strip():
+        return "links"
+    return "catalog"
 
 
 def build_client_export(client_key: str, mapping_df: pd.DataFrame) -> tuple[bytes, list[ExportRowResult]]:
@@ -118,6 +236,45 @@ def build_client_export(client_key: str, mapping_df: pd.DataFrame) -> tuple[byte
         archive.writestr("report.csv", export_report_csv(report_rows))
 
     return output.getvalue(), report_rows
+
+
+def build_catalog_export_from_upload(
+    client_key: str,
+    upload_df: pd.DataFrame,
+) -> ClientExportArtifacts:
+    catalog_rows = upload_df[upload_df["source_mode"] == "catalog"][["article", "client_code"]].copy()
+    if catalog_rows.empty:
+        return ClientExportArtifacts(None, [], 0)
+
+    zip_bytes, report_rows = build_client_export(client_key, catalog_rows.reset_index(drop=True))
+    return ClientExportArtifacts(zip_bytes, report_rows, len(catalog_rows.index))
+
+
+def filter_upload_rows_for_client(client_key: str, upload_df: pd.DataFrame) -> pd.DataFrame:
+    prepared = upload_df.copy()
+    if client_key == "sportmaster":
+        mask = prepared["client_code"].apply(is_valid_sportmaster_code)
+        return prepared[mask].reset_index(drop=True)
+    if client_key == "detmir":
+        mask = prepared["client_code"].apply(is_valid_detmir_code)
+        return prepared[mask].reset_index(drop=True)
+    return prepared.reset_index(drop=True)
+
+
+def is_valid_sportmaster_code(value: str) -> bool:
+    normalized = str(value).strip()
+    if not normalized or len(normalized) > 64:
+        return False
+    return bool(SPORTMASTER_CODE_PATTERN.fullmatch(normalized))
+
+
+def is_valid_detmir_code(value: str) -> bool:
+    normalized = str(value).strip()
+    if not normalized or len(normalized) > 128:
+        return False
+    if not DETMIR_CODE_PATTERN.fullmatch(normalized):
+        return False
+    return any(character.isdigit() for character in normalized)
 
 
 def build_client_file_name(profile: dict[str, Any], client_code: str, index: int, extension: str) -> str:

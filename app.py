@@ -7,10 +7,16 @@ import streamlit as st
 
 from config import CLIENT_PROFILES_PATH, DB_PATH, EXPORTS_DIR, MEDIA_DIR, TEMPLATES_DIR, ensure_directories
 from db import fetch_product_images, fetch_products, init_db
-from services.catalog import REQUIRED_COLUMNS, load_best_matching_dataframe, load_dataframe, normalize_catalog_dataframe
+from services.auth import ensure_authentication, render_auth_sidebar
+from services.catalog import REQUIRED_COLUMNS, load_best_matching_dataframe, normalize_catalog_dataframe
 from services.client_profiles import load_client_profiles
-from services.export_service import CLIENT_MAPPING_ALIASES, build_client_export, normalize_mapping_dataframe
-from services.link_export import LINK_EXPORT_ALIASES, build_marketplace_link_export, normalize_link_export_dataframe
+from services.export_service import (
+    CLIENT_UPLOAD_ALIASES,
+    build_catalog_export_from_upload,
+    filter_upload_rows_for_client,
+    normalize_client_upload_dataframe,
+)
+from services.link_export import build_marketplace_link_export
 from services.photo_pipeline import ingest_and_collect
 
 
@@ -26,7 +32,7 @@ def bootstrap() -> None:
     init_db()
 
 
-def render_sidebar() -> None:
+def render_sidebar(auth_state) -> None:
     profiles = load_client_profiles()
     st.sidebar.title("UpdatPic")
     st.sidebar.caption("Сбор, хранение и клиентская выгрузка фото.")
@@ -43,6 +49,7 @@ def render_sidebar() -> None:
             f"Код: `{key}`  \n"
             f"Имя файла: `{profile['file_name_template']}`"
         )
+    render_auth_sidebar(auth_state)
 
 
 def render_template_download(template_name: str, label: str, help_text: str) -> None:
@@ -185,23 +192,18 @@ def render_catalog_tab() -> None:
 def render_clients_tab() -> None:
     profiles = load_client_profiles()
     st.subheader("Клиентские выгрузки")
-    render_template_download(
-        "client_mapping_template.xlsx",
-        "Скачать шаблон клиента",
-        "Готовый Excel для сопоставления артикула и кода клиента.",
-    )
     template_col_1, template_col_2 = st.columns(2)
     with template_col_1:
         render_template_download(
             "sportmaster_upload_template.xlsx",
             "Шаблон Спортмастер",
-            "Excel-шаблон с колонкой `Код цветомодели` и памяткой по формату Спортмастера.",
+            "Один шаблон для двух сценариев: фото уже в каталоге или уже есть готовые ссылки.",
         )
     with template_col_2:
         render_template_download(
             "detmir_upload_template.xlsx",
             "Шаблон Детский Мир",
-            "Excel-шаблон с колонкой `Штрихкод товара` и памяткой по формату Детского Мира.",
+            "Один шаблон для двух сценариев: фото уже в каталоге или уже есть готовые ссылки.",
         )
     client_key = st.selectbox(
         "Клиент",
@@ -212,9 +214,14 @@ def render_clients_tab() -> None:
     st.caption(f"Источник правил: {profile.get('source_reference', 'не указан')}")
     for note in profile.get("notes", []):
         st.write(f"- {note}")
+    st.info(
+        "Один файл клиента поддерживает два режима: `каталог` и `ссылки`. "
+        "Если фото уже спарсены в UpdatPic, заполните артикул и код клиента. "
+        "Если ссылки уже есть, заполните код клиента и колонку со ссылками."
+    )
 
     file = st.file_uploader(
-        "Файл соответствия товара и клиентского кода",
+        "Файл клиента",
         type=["csv", "xlsx", "xls"],
         key="client_mapping_uploader",
     )
@@ -225,107 +232,100 @@ def render_clients_tab() -> None:
         dataframe, sheet_name = load_best_matching_dataframe(
             file.name,
             file.getvalue(),
-            CLIENT_MAPPING_ALIASES,
+            CLIENT_UPLOAD_ALIASES,
         )
-        mapping_df = normalize_mapping_dataframe(dataframe)
+        upload_df = normalize_client_upload_dataframe(dataframe)
+        upload_df = filter_upload_rows_for_client(client_key, upload_df)
     except ValueError as exc:
         st.error(f"Не удалось разобрать клиентский файл: {exc}")
         st.info(
-            "Ожидаются колонки `article` и `client_code`. "
-            "Если это Excel с несколькими листами, сервис попробует выбрать лучший лист автоматически."
+            "Ожидаются колонки с кодом клиента, а также артикул и/или ссылки на фото. "
+            "Если это Excel с несколькими строками-инструкциями, сервис попробует сам найти строку заголовков."
         )
         return
 
     if sheet_name != file.name:
         st.caption(f"Использован лист Excel: `{sheet_name}`")
-    st.dataframe(mapping_df, use_container_width=True)
+    st.dataframe(upload_df, use_container_width=True)
 
-    if st.button("Собрать архив для клиента", type="primary"):
-        zip_bytes, report_rows = build_client_export(client_key, mapping_df)
-        st.success("Архив подготовлен.")
-        st.dataframe(pd.DataFrame([row.__dict__ for row in report_rows]), use_container_width=True)
-        st.download_button(
-            label="Скачать ZIP",
-            data=zip_bytes,
-            file_name=f"{client_key}_photos.zip",
-            mime="application/zip",
-        )
-
-    st.divider()
-    st.subheader("Готовые ссылки без парсинга")
-    st.write(
-        "Если у вас уже есть готовые ссылки под требования площадки, "
-        "можно сразу собрать Excel-файл для загрузки без скачивания фото."
-    )
+    mode_counts = upload_df["source_mode"].value_counts().to_dict()
     st.caption(
-        "Шаблоны ниже уже содержат нужные столбцы для площадок: "
-        "`Код цветомодели + Ссылки на фото` для Спортмастера и "
-        "`Штрихкод товара + Ссылки на фото` для Детского Мира."
+        f"Распознано строк: каталог `{mode_counts.get('catalog', 0)}`, "
+        f"ссылки `{mode_counts.get('links', 0)}`."
     )
-    link_template_col_1, link_template_col_2 = st.columns(2)
-    with link_template_col_1:
-        render_template_download(
-            "sportmaster_links_template.xlsx",
-            "Шаблон ссылок Спортмастер",
-            "Готовый шаблон для Спортмастера: код цветомодели + прямые ссылки на фото.",
-        )
-    with link_template_col_2:
-        render_template_download(
-            "detmir_links_template.xlsx",
-            "Шаблон ссылок Детский Мир",
-            "Готовый шаблон для Детского Мира: штрихкод + ссылки на фото.",
-        )
 
-    link_client_key = st.selectbox(
-        "Площадка для файла со ссылками",
-        options=["sportmaster", "detmir"],
-        format_func=lambda key: profiles[key]["label"],
-        key="link_export_client_key",
-    )
-    link_file = st.file_uploader(
-        "Файл с готовыми ссылками",
-        type=["csv", "xlsx", "xls"],
-        key="ready_links_uploader",
-    )
-    if not link_file:
-        return
+    if st.button("Подготовить выгрузку клиента", type="primary"):
+        catalog_artifacts = build_catalog_export_from_upload(client_key, upload_df)
+        link_rows = upload_df[upload_df["source_mode"] == "links"][
+            ["article", "client_code", "image_urls_raw"]
+        ].reset_index(drop=True)
 
-    try:
-        link_dataframe, link_sheet_name = load_best_matching_dataframe(
-            link_file.name,
-            link_file.getvalue(),
-            LINK_EXPORT_ALIASES,
-        )
-        link_mapping_df = normalize_link_export_dataframe(link_dataframe)
-    except ValueError as exc:
-        st.error(f"Не удалось разобрать файл со ссылками: {exc}")
-        st.info("Ожидаются колонки с кодом клиента и ссылками на фото.")
-        return
+        link_excel_bytes: bytes | None = None
+        link_report_df = pd.DataFrame()
+        if not link_rows.empty:
+            link_excel_bytes, link_report_df = build_marketplace_link_export(client_key, link_rows)
 
-    if link_sheet_name != link_file.name:
-        st.caption(f"Использован лист Excel: `{link_sheet_name}`")
-    st.dataframe(link_mapping_df, use_container_width=True)
+        combined_rows: list[dict[str, object]] = []
+        for row in catalog_artifacts.catalog_report_rows:
+            combined_rows.append(
+                {
+                    "source_mode": "catalog",
+                    "article": row.article,
+                    "client_code": row.client_code,
+                    "status": row.status,
+                    "message": row.message,
+                    "exported_files": row.exported_files,
+                }
+            )
+        if not link_report_df.empty:
+            for _, row in link_report_df.iterrows():
+                combined_rows.append(
+                    {
+                        "source_mode": "links",
+                        "article": row.get("article", ""),
+                        "client_code": row["client_code"],
+                        "status": row["status"],
+                        "message": row["message"],
+                        "exported_files": row["link_count"],
+                    }
+                )
 
-    if st.button("Собрать Excel со ссылками", type="primary"):
-        export_bytes, report_df = build_marketplace_link_export(link_client_key, link_mapping_df)
-        st.success("Файл со ссылками подготовлен.")
-        st.dataframe(report_df, use_container_width=True)
-        st.download_button(
-            label="Скачать Excel со ссылками",
-            data=export_bytes,
-            file_name=f"{link_client_key}_ready_links.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        if combined_rows:
+            st.success("Выгрузка подготовлена.")
+            st.dataframe(pd.DataFrame(combined_rows), use_container_width=True)
+        else:
+            st.warning("В файле не нашлось строк для выгрузки.")
+
+        download_columns = st.columns(2)
+        with download_columns[0]:
+            if catalog_artifacts.catalog_zip_bytes:
+                st.download_button(
+                    label="Скачать ZIP с локальными фото",
+                    data=catalog_artifacts.catalog_zip_bytes,
+                    file_name=f"{client_key}_photos.zip",
+                    mime="application/zip",
+                )
+        with download_columns[1]:
+            if link_excel_bytes:
+                st.download_button(
+                    label="Скачать Excel со ссылками",
+                    data=link_excel_bytes,
+                    file_name=f"{client_key}_ready_links.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
 
 def main() -> None:
     bootstrap()
-    render_sidebar()
+    auth_state = ensure_authentication()
+    render_sidebar(auth_state)
     st.title("UpdatPic")
     st.caption(
         "Сервис для поиска фото по артикулу и сайту поставщика, локального хранения "
         "и выгрузки архивов под требования клиентов."
     )
+    if auth_state.user:
+        st.caption(f"Текущий пользователь: {auth_state.user.get('display_name') or auth_state.user.get('login')}")
     tab_catalog, tab_clients = st.tabs(["Каталог фото", "Клиенты"])
     with tab_catalog:
         render_catalog_tab()

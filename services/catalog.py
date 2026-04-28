@@ -27,6 +27,50 @@ def _normalize_header_value(value: object) -> str:
     return str(value).strip().lower().replace("\n", " ").replace("\r", " ")
 
 
+def _build_alias_sets(alias_groups: dict[str, tuple[str, ...]]) -> list[set[str]]:
+    return [{_normalize_header_value(alias) for alias in aliases} for aliases in alias_groups.values()]
+
+
+def _score_header_candidates(values: list[object], alias_sets: list[set[str]]) -> int:
+    normalized_values = {_normalize_header_value(value) for value in values if _normalize_header_value(value)}
+    score = 0
+    for aliases in alias_sets:
+        if normalized_values & aliases:
+            score += 1
+    return score
+
+
+def _promote_header_row(raw_dataframe: pd.DataFrame, alias_groups: dict[str, tuple[str, ...]]) -> tuple[pd.DataFrame, int]:
+    if raw_dataframe.empty and len(raw_dataframe.columns) == 0:
+        return raw_dataframe.copy(), 0
+
+    alias_sets = _build_alias_sets(alias_groups)
+    scan_limit = min(len(raw_dataframe.index), 10)
+    best_row_index = 0
+    best_score = _score_header_candidates(list(raw_dataframe.columns), alias_sets)
+
+    for row_index in range(scan_limit):
+        row_values = raw_dataframe.iloc[row_index].tolist()
+        score = _score_header_candidates(row_values, alias_sets)
+        if score > best_score:
+            best_score = score
+            best_row_index = row_index
+
+    if best_row_index == 0 and best_score <= 0:
+        prepared = raw_dataframe.copy()
+        prepared = prepared.dropna(how="all").reset_index(drop=True)
+        return prepared, 0
+
+    header_values = [
+        str(value).strip() if value is not None else ""
+        for value in raw_dataframe.iloc[best_row_index].tolist()
+    ]
+    prepared = raw_dataframe.iloc[best_row_index + 1 :].copy()
+    prepared.columns = header_values
+    prepared = prepared.dropna(how="all").reset_index(drop=True)
+    return prepared, best_row_index
+
+
 def normalize_headers(columns: list[str]) -> dict[str, str]:
     normalized: dict[str, str] = {}
     lowered = {_normalize_header_value(column): column for column in columns}
@@ -49,8 +93,8 @@ def load_dataframe(file_name: str, file_bytes: bytes) -> pd.DataFrame:
         raise ValueError(f"Неподдерживаемый формат файла: {extension}")
 
     if extension == ".csv":
-        return pd.read_csv(BytesIO(file_bytes))
-    return pd.read_excel(BytesIO(file_bytes))
+        return pd.read_csv(BytesIO(file_bytes), dtype=object)
+    return pd.read_excel(BytesIO(file_bytes), dtype=object)
 
 
 def load_best_matching_dataframe(
@@ -63,17 +107,22 @@ def load_best_matching_dataframe(
         raise ValueError(f"Неподдерживаемый формат файла: {extension}")
 
     if extension == ".csv":
-        return pd.read_csv(BytesIO(file_bytes)), file_name
+        raw_dataframe = pd.read_csv(BytesIO(file_bytes), header=None, dtype=object)
+        prepared, _ = _promote_header_row(raw_dataframe, alias_groups)
+        return prepared, file_name
 
-    workbook = pd.read_excel(BytesIO(file_bytes), sheet_name=None)
+    workbook = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=object)
     best_sheet_name = ""
     best_dataframe: pd.DataFrame | None = None
     best_score = -1
 
-    for sheet_name, dataframe in workbook.items():
-        if dataframe.empty and len(dataframe.columns) == 0:
+    for sheet_name, raw_dataframe in workbook.items():
+        if raw_dataframe.empty and len(raw_dataframe.columns) == 0:
             continue
-        normalized_columns = {_normalize_header_value(column) for column in dataframe.columns}
+        prepared, _ = _promote_header_row(raw_dataframe, alias_groups)
+        if prepared.empty and len(prepared.columns) == 0:
+            continue
+        normalized_columns = {_normalize_header_value(column) for column in prepared.columns}
         score = 0
         for aliases in alias_groups.values():
             if any(alias in normalized_columns for alias in aliases):
@@ -81,7 +130,7 @@ def load_best_matching_dataframe(
         if score > best_score:
             best_score = score
             best_sheet_name = str(sheet_name)
-            best_dataframe = dataframe
+            best_dataframe = prepared
 
     if best_dataframe is None:
         raise ValueError("В Excel-файле не найдено листов с данными.")
