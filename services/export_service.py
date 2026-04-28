@@ -95,8 +95,10 @@ def build_client_export(client_key: str, mapping_df: pd.DataFrame) -> tuple[byte
                 )
                 continue
 
+            max_images = int(profile.get("max_images", len(images)))
             exported_files = 0
-            for index, image in enumerate(images, start=1):
+            row_warnings: list[str] = []
+            for index, image in enumerate(images[:max_images], start=1):
                 file_path = Path(image["local_path"])
                 if not file_path.exists():
                     continue
@@ -104,7 +106,11 @@ def build_client_export(client_key: str, mapping_df: pd.DataFrame) -> tuple[byte
                 file_name = build_client_file_name(profile, client_code, index, extension)
                 archive.writestr(file_name, file_bytes)
                 exported_files += 1
-            message = "OK" if exported_files else "Нет файлов для упаковки"
+                row_warnings.extend(warnings)
+            if row_warnings:
+                message = "; ".join(dict.fromkeys(row_warnings))
+            else:
+                message = "OK" if exported_files else "Нет файлов для упаковки"
             report_rows.append(
                 ExportRowResult(article, client_code, "ok" if exported_files else "warning", message, exported_files)
             )
@@ -139,24 +145,111 @@ def prepare_image_for_client(file_path: Path, profile: dict[str, Any]) -> tuple[
         if max_long_side and long_side > max_long_side:
             image.thumbnail((max_long_side, max_long_side))
 
-        buffer = io.BytesIO()
-        save_kwargs: dict[str, Any] = {}
-        if target_extension in {"jpg", "jpeg"}:
-            save_format = "JPEG"
-            save_kwargs = {"quality": 90, "optimize": True}
-            target_extension = "jpg"
-        elif target_extension == "png":
-            save_format = "PNG"
-            save_kwargs = {"optimize": True}
-        else:
-            save_format = target_extension.upper()
-        image.save(buffer, format=save_format, **save_kwargs)
+        image_for_export = image.copy()
 
-    file_bytes = buffer.getvalue()
     max_file_size_mb = profile.get("max_file_size_mb")
-    if max_file_size_mb and len(file_bytes) > max_file_size_mb * 1024 * 1024:
+    max_file_size_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else None
+    file_bytes, target_extension = serialize_image_for_client(
+        image_for_export,
+        target_extension,
+        allowed_extensions,
+        max_file_size_bytes,
+    )
+    if max_file_size_bytes and len(file_bytes) > max_file_size_bytes:
         warnings.append(f"Файл превышает лимит {max_file_size_mb} МБ")
     return file_bytes, target_extension, warnings
+
+
+def serialize_image_for_client(
+    image: Image.Image,
+    target_extension: str,
+    allowed_extensions: set[str],
+    max_file_size_bytes: int | None,
+) -> tuple[bytes, str]:
+    strategies: list[str] = []
+    if target_extension in {"jpg", "jpeg"}:
+        strategies.append("jpg")
+    elif target_extension in allowed_extensions:
+        strategies.append(target_extension)
+
+    for fallback in ("jpg", "webp", "png"):
+        if fallback in allowed_extensions and fallback not in strategies:
+            strategies.append(fallback)
+
+    best_bytes = b""
+    best_extension = strategies[0] if strategies else "jpg"
+    working_image = image.copy()
+
+    while True:
+        improved = False
+        for extension in strategies:
+            candidate_bytes = encode_image_bytes(working_image, extension)
+            candidate_bytes = shrink_encoded_bytes_if_needed(
+                working_image,
+                extension,
+                candidate_bytes,
+                max_file_size_bytes,
+            )
+            if not best_bytes or len(candidate_bytes) < len(best_bytes):
+                best_bytes = candidate_bytes
+                best_extension = extension
+            if not max_file_size_bytes or len(candidate_bytes) <= max_file_size_bytes:
+                return candidate_bytes, extension
+        if not max_file_size_bytes or max(working_image.size) <= 1000:
+            return best_bytes, best_extension
+
+        # If the file is still too large, gently scale it down and try again.
+        new_width = max(int(working_image.size[0] * 0.9), 1)
+        new_height = max(int(working_image.size[1] * 0.9), 1)
+        if (new_width, new_height) == working_image.size:
+            return best_bytes, best_extension
+        working_image = working_image.resize((new_width, new_height))
+        improved = True
+        if not improved:
+            return best_bytes, best_extension
+
+
+def shrink_encoded_bytes_if_needed(
+    image: Image.Image,
+    extension: str,
+    initial_bytes: bytes,
+    max_file_size_bytes: int | None,
+) -> bytes:
+    if not max_file_size_bytes or len(initial_bytes) <= max_file_size_bytes:
+        return initial_bytes
+
+    if extension == "jpg":
+        for quality in (85, 80, 75, 70, 65, 60, 55, 50):
+            candidate = encode_image_bytes(image, extension, quality=quality)
+            if len(candidate) <= max_file_size_bytes:
+                return candidate
+        return candidate
+
+    if extension == "webp":
+        for quality in (85, 80, 75, 70, 65, 60, 55, 50):
+            candidate = encode_image_bytes(image, extension, quality=quality)
+            if len(candidate) <= max_file_size_bytes:
+                return candidate
+        return candidate
+
+    return initial_bytes
+
+
+def encode_image_bytes(image: Image.Image, extension: str, quality: int = 90) -> bytes:
+    buffer = io.BytesIO()
+    if extension in {"jpg", "jpeg"}:
+        working = image.convert("RGB")
+        working.save(buffer, format="JPEG", quality=quality, optimize=True)
+        return buffer.getvalue()
+    if extension == "png":
+        image.save(buffer, format="PNG", optimize=True)
+        return buffer.getvalue()
+    if extension == "webp":
+        working = image.convert("RGB") if image.mode not in {"RGB", "RGBA"} else image
+        working.save(buffer, format="WEBP", quality=quality, method=6)
+        return buffer.getvalue()
+    image.save(buffer, format=extension.upper())
+    return buffer.getvalue()
 
 
 def export_report_csv(rows: list[ExportRowResult]) -> str:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +10,7 @@ from db import fetch_product_images, fetch_products, init_db
 from services.catalog import REQUIRED_COLUMNS, load_best_matching_dataframe, load_dataframe, normalize_catalog_dataframe
 from services.client_profiles import load_client_profiles
 from services.export_service import CLIENT_MAPPING_ALIASES, build_client_export, normalize_mapping_dataframe
+from services.link_export import LINK_EXPORT_ALIASES, build_marketplace_link_export, normalize_link_export_dataframe
 from services.photo_pipeline import ingest_and_collect
 
 
@@ -66,6 +66,10 @@ def render_catalog_tab() -> None:
         "`артикул`, `название`, `шт`, `сайт`, `артикул поставщика`, "
         "`ссылка на товар`, `картинки`."
     )
+    st.caption(
+        "Для прямых фото лучше указывать открытые ссылки на сами файлы. "
+        "Для Спортмастера держите порядок ссылок как нужно в карточке и разделяйте их `;`."
+    )
     render_template_download(
         "manager_import_template.xlsx",
         "Скачать шаблон менеджера",
@@ -101,18 +105,48 @@ def render_catalog_tab() -> None:
             results: list[dict] = []
             total = len(prepared.index)
             for index, row in enumerate(prepared.to_dict(orient="records"), start=1):
-                result = ingest_and_collect(row, limit=limit)
+                try:
+                    result = ingest_and_collect(row, limit=limit)
+                    row_status = result["status"]
+                    error_message = ""
+                except Exception as exc:
+                    result = {
+                        "candidate_count": 0,
+                        "downloaded_count": 0,
+                        "existing_preserved_count": 0,
+                        "status": "error",
+                    }
+                    row_status = "error"
+                    error_message = str(exc)
+
                 results.append(
                     {
                         "article": row["article"],
                         "name": row["name"],
+                        "status": row_status,
                         "candidates": result["candidate_count"],
                         "downloaded": result["downloaded_count"],
+                        "preserved_existing": result.get("existing_preserved_count", 0),
+                        "error": error_message,
                     }
                 )
                 progress.progress(index / total)
-            st.success("Сбор фото завершён.")
-            st.dataframe(pd.DataFrame(results), use_container_width=True)
+            results_df = pd.DataFrame(results)
+            success_count = int((results_df["status"] == "ok").sum())
+            preserved_count = int((results_df["status"] == "preserved").sum())
+            error_count = int((results_df["status"] == "error").sum())
+
+            if error_count:
+                st.warning(
+                    f"Сбор завершён с ошибками: успешно {success_count}, "
+                    f"сохранены старые фото {preserved_count}, ошибок {error_count}."
+                )
+            else:
+                st.success(
+                    f"Сбор фото завершён: успешно {success_count}, "
+                    f"сохранены старые фото {preserved_count}."
+                )
+            st.dataframe(results_df, use_container_width=True)
 
     st.divider()
     st.subheader("Локальный каталог")
@@ -215,6 +249,67 @@ def render_clients_tab() -> None:
             data=zip_bytes,
             file_name=f"{client_key}_photos.zip",
             mime="application/zip",
+        )
+
+    st.divider()
+    st.subheader("Готовые ссылки без парсинга")
+    st.write(
+        "Если у вас уже есть готовые ссылки под требования площадки, "
+        "можно сразу собрать Excel-файл для загрузки без скачивания фото."
+    )
+    link_template_col_1, link_template_col_2 = st.columns(2)
+    with link_template_col_1:
+        render_template_download(
+            "sportmaster_links_template.xlsx",
+            "Шаблон ссылок Спортмастер",
+            "Готовый шаблон для Спортмастера: код цветомодели + прямые ссылки на фото.",
+        )
+    with link_template_col_2:
+        render_template_download(
+            "detmir_links_template.xlsx",
+            "Шаблон ссылок Детский Мир",
+            "Готовый шаблон для Детского Мира: штрихкод + ссылки на фото.",
+        )
+
+    link_client_key = st.selectbox(
+        "Площадка для файла со ссылками",
+        options=["sportmaster", "detmir"],
+        format_func=lambda key: profiles[key]["label"],
+        key="link_export_client_key",
+    )
+    link_file = st.file_uploader(
+        "Файл с готовыми ссылками",
+        type=["csv", "xlsx", "xls"],
+        key="ready_links_uploader",
+    )
+    if not link_file:
+        return
+
+    try:
+        link_dataframe, link_sheet_name = load_best_matching_dataframe(
+            link_file.name,
+            link_file.getvalue(),
+            LINK_EXPORT_ALIASES,
+        )
+        link_mapping_df = normalize_link_export_dataframe(link_dataframe)
+    except ValueError as exc:
+        st.error(f"Не удалось разобрать файл со ссылками: {exc}")
+        st.info("Ожидаются колонки с кодом клиента и ссылками на фото.")
+        return
+
+    if link_sheet_name != link_file.name:
+        st.caption(f"Использован лист Excel: `{link_sheet_name}`")
+    st.dataframe(link_mapping_df, use_container_width=True)
+
+    if st.button("Собрать Excel со ссылками", type="primary"):
+        export_bytes, report_df = build_marketplace_link_export(link_client_key, link_mapping_df)
+        st.success("Файл со ссылками подготовлен.")
+        st.dataframe(report_df, use_container_width=True)
+        st.download_button(
+            label="Скачать Excel со ссылками",
+            data=export_bytes,
+            file_name=f"{link_client_key}_ready_links.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
 

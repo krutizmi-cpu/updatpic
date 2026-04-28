@@ -92,6 +92,8 @@ streamlit run app.py
 - `templates/client_mapping_template.xlsx`
 - `templates/sportmaster_upload_template.xlsx`
 - `templates/detmir_upload_template.xlsx`
+- `templates/sportmaster_links_template.xlsx`
+- `templates/detmir_links_template.xlsx`
 
 Что внутри:
 
@@ -107,6 +109,12 @@ streamlit run app.py
 - `detmir_upload_template.xlsx`:
   рабочий лист `Детский Мир` с колонками `article` и `Штрихкод товара`;
   лист `Как загружать` с примером итоговых имён файлов `Штрихкод_01`.
+- `sportmaster_links_template.xlsx`:
+  для сценария без парсинга, когда уже есть готовые прямые ссылки;
+  колонки `article`, `Код цветомодели`, `Ссылки на фото`.
+- `detmir_links_template.xlsx`:
+  для сценария без парсинга, когда уже есть готовые прямые ссылки или публичные ссылки Яндекс Диска;
+  колонки `article`, `Штрихкод товара`, `Ссылки на фото`.
 
 ## Структура проекта
 

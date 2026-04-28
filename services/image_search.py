@@ -41,12 +41,15 @@ class DownloadedImage:
 def parse_direct_image_urls(raw_value: str) -> list[CandidateImage]:
     if not raw_value:
         return []
-    chunks = [
-        chunk.strip()
-        for chunk in re.split(r"[;\n,]+", raw_value)
-        if chunk.strip()
-    ]
-    return [CandidateImage(source="provided", source_url=chunk) for chunk in chunks]
+    direct_candidates: list[CandidateImage] = []
+    page_candidates: list[CandidateImage] = []
+    for chunk in split_reference_urls(raw_value):
+        if is_probable_image_url(chunk) or is_yandex_disk_public_url(chunk):
+            direct_candidates.append(CandidateImage(source="provided", source_url=chunk))
+        elif chunk.startswith(("http://", "https://")):
+            page_candidates.extend(extract_images_from_page(chunk, source="provided_page"))
+
+    return direct_candidates + page_candidates
 
 
 def collect_candidate_images(product: dict) -> list[CandidateImage]:
@@ -55,13 +58,14 @@ def collect_candidate_images(product: dict) -> list[CandidateImage]:
 
     product_url = product.get("product_url") or ""
     if product_url:
-        candidates.extend(extract_images_from_page(product_url, source="supplier_page"))
+        for page_url in split_reference_urls(product_url):
+            candidates.extend(extract_images_from_page(page_url, source="supplier_page"))
 
     supplier_site = product.get("supplier_site") or ""
     article = product.get("supplier_article") or product.get("article") or ""
     name = product.get("name") or ""
     if supplier_site and article:
-        search_pages = search_web_pages(supplier_site, article, name)
+        search_pages = search_web_pages(normalize_supplier_site(supplier_site), article, name)
         for page_url in search_pages:
             candidates.extend(extract_images_from_page(page_url, source="search_page"))
 
@@ -94,8 +98,12 @@ def search_web_pages(supplier_site: str, article: str, name: str, limit: int = 3
     query = " ".join(query_parts)
     url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
 
-    response = requests.get(url, headers=request_headers(), timeout=20)
-    response.raise_for_status()
+    try:
+        response = requests.get(url, headers=request_headers(), timeout=20)
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+
     soup = BeautifulSoup(response.text, "html.parser")
     links: list[str] = []
     for anchor in soup.select("a.result__a"):
@@ -105,6 +113,28 @@ def search_web_pages(supplier_site: str, article: str, name: str, limit: int = 3
         if len(links) >= limit:
             break
     return links
+
+
+def split_reference_urls(raw_value: str) -> list[str]:
+    chunks = [chunk.strip() for chunk in re.split(r"[;\s,]+", raw_value) if chunk.strip()]
+    return [chunk for chunk in chunks if chunk.startswith(("http://", "https://"))]
+
+
+def normalize_supplier_site(raw_value: str) -> str:
+    value = raw_value.strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    return parsed.netloc or value
+
+
+def is_probable_image_url(url: str) -> bool:
+    return bool(IMAGE_PATTERN.search(url))
+
+
+def is_yandex_disk_public_url(url: str) -> bool:
+    host = (urlparse(url).netloc or "").lower()
+    return "disk.yandex" in host or "yadi.sk" in host
 
 
 def extract_images_from_page(url: str, source: str) -> list[CandidateImage]:
@@ -151,7 +181,8 @@ def download_candidate_images(product_id: int, candidates: list[CandidateImage],
 
 
 def download_image(product_dir: Path, candidate: CandidateImage, index: int) -> DownloadedImage:
-    response = requests.get(candidate.source_url, headers=request_headers(), timeout=30)
+    download_url = resolve_download_url(candidate.source_url)
+    response = requests.get(download_url, headers=request_headers(), timeout=30)
     response.raise_for_status()
     content_type = response.headers.get("Content-Type")
     content = response.content
@@ -206,6 +237,26 @@ def infer_extension(source_url: str, content_type: str | None, content: bytes) -
     except OSError:
         pass
     return "jpg"
+
+
+def resolve_download_url(url: str) -> str:
+    if not is_yandex_disk_public_url(url):
+        return url
+
+    try:
+        response = requests.get(
+            "https://cloud-api.yandex.net/v1/disk/public/resources/download",
+            params={"public_key": url},
+            headers=request_headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return url
+
+    href = payload.get("href")
+    return href if isinstance(href, str) and href else url
 
 
 def request_headers() -> dict[str, str]:

@@ -66,8 +66,8 @@ function addManagerTemplateSheet(workbook) {
       "supplier-brand.ru",
       "AB-4451",
       "https://supplier-brand.ru/catalog/ab-4451",
-      "https://cdn.supplier-brand.ru/ab-4451-1.jpg; https://cdn.supplier-brand.ru/ab-4451-2.jpg",
-      "Если прямых ссылок нет, можно оставить пусто",
+      "https://cdn.supplier-brand.ru/ab-4451-1.jpg;https://cdn.supplier-brand.ru/ab-4451-2.jpg",
+      "Для Спортмастера прямые ссылки лучше давать через ; без пробелов",
     ],
     ["TSR-10026", "Рюкзак городской 20 л", 12, "supplier-brand.ru", "BP-220", "", "", "Тогда сервис попробует поиск по сайту и интернету"],
     ["", "", "", "", "", "", "", ""],
@@ -119,19 +119,20 @@ function addSportmasterReadmeSheet(workbook) {
   sheet.getRange("A1:C1").values = [["Шаблон для Спортмастера", null, null]];
   sheet.getRange("A1:C1").merge();
   styleTitle(sheet.getRange("A1:C1"));
-  sheet.getRange("A3:C10").values = [
+  sheet.getRange("A3:C11").values = [
     ["Пункт", "Что делать", "Комментарий"],
     ["1", "На листе Спортмастер заполнить article и Код цветомодели", "Каждая строка = один товар в UpdatPic"],
     ["2", "Загрузить этот файл в раздел Клиенты и выбрать клиента Спортмастер", "Сервис упакует фото в ZIP"],
     ["3", "После сборки архива имена файлов будут вида КодЦветомодели_1, КодЦветомодели_2 и т.д.", "Пример: SM-RED-42_1.jpg"],
-    ["Формат", "Допустимые файлы: jpg, jpeg, png", "UpdatPic сам нормализует расширение при необходимости"],
+    ["Формат", "Допустимые файлы: jpg, jpeg, png", "Ссылка на фото должна заканчиваться расширением файла"],
     ["Размер", "До 50 МБ на файл", "Содержимое фото всё равно лучше проверить глазами"],
+    ["Ссылки", "Если менеджер даёт прямые ссылки, указывайте каждую отдельно через ; без пробелов", "Порядок ссылок = порядок фото в карточке"],
     ["Важно", "Код цветомодели даёт менеджер", "Без него файлы нельзя правильно назвать для Спортмастера"],
     ["Важно", "На фото не должно быть водяных знаков, ссылок и посторонних товаров", "Это уже правило модерации клиента"],
   ];
   styleHeader(sheet.getRange("A3:C3"));
-  styleNote(sheet.getRange("A4:C10"));
-  sheet.getRange("A1:C10").format.wrapText = true;
+  styleNote(sheet.getRange("A4:C11"));
+  sheet.getRange("A1:C11").format.wrapText = true;
   setColumnWidths(sheet, [90, 360, 320]);
 }
 
@@ -164,7 +165,7 @@ function addDetmirReadmeSheet(workbook) {
     ["2", "Загрузить этот файл в раздел Клиенты и выбрать клиента Детский Мир", "Сервис упакует фото в ZIP"],
     ["3", "После сборки архива имена файлов будут вида Штрихкод_01, Штрихкод_02 и т.д.", "Пример: 4607000012345_01.jpg"],
     ["Формат", "Допустимые файлы: jpg, jpeg, png, webp", "UpdatPic сохранит подходящее расширение"],
-    ["Размер", "Длинная сторона 1000-8000 px, до 10 МБ", "Сервис уменьшит слишком большие изображения"],
+    ["Размер", "Длинная сторона 1000-8000 px, до 1 МБ", "Сервис уменьшит слишком большие изображения"],
     ["Важно", "Штрихкод товара даёт менеджер", "Без него файлы нельзя правильно назвать для Детского Мира"],
     ["Важно", "Фото не должны быть перегружены, с водяными знаками, QR и посторонними логотипами", "Это уже правило модерации клиента"],
   ];
@@ -195,6 +196,98 @@ function addReadmeSheet(workbook) {
   setColumnWidths(sheet, [80, 360, 320]);
 }
 
+function addSportmasterLinksTemplateSheet(workbook) {
+  const sheet = workbook.worksheets.add("Ссылки Спортмастер");
+  setSheetFrame(sheet);
+
+  sheet.getRange("A1:C1").values = [["article", "Код цветомодели", "Ссылки на фото"]];
+  styleTitle(sheet.getRange("A1:C1"));
+
+  sheet.getRange("A2:C4").values = [
+    [
+      "TSR-10025",
+      "SM-RED-42",
+      "https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_1.jpg;https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_2.jpg",
+    ],
+    [
+      "TSR-10026",
+      "SM-BLACK-43",
+      "https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_3.jpg",
+    ],
+    ["", "", ""],
+  ];
+  styleExample(sheet.getRange("A2:C3"));
+  setColumnWidths(sheet, [180, 220, 700]);
+  sheet.getRange("A1:C20").format.wrapText = true;
+}
+
+function addSportmasterLinksReadmeSheet(workbook) {
+  const sheet = workbook.worksheets.add("Как собрать файл");
+  sheet.getRange("A1:C1").values = [["Готовые ссылки для Спортмастера", null, null]];
+  sheet.getRange("A1:C1").merge();
+  styleTitle(sheet.getRange("A1:C1"));
+  sheet.getRange("A3:C10").values = [
+    ["Пункт", "Что делать", "Комментарий"],
+    ["1", "Заполнить Код цветомодели и Ссылки на фото", "Парсинг и скачивание не нужны"],
+    ["2", "Вставлять только прямые открытые ссылки на jpg/jpeg/png", "Ссылка должна заканчиваться расширением"],
+    ["3", "Если фото несколько, вставлять ссылки через ; без пробелов", "Порядок ссылок = порядок отображения фото"],
+    ["4", "Загрузить файл в блок Готовые ссылки без парсинга", "Сервис соберёт итоговый Excel"],
+    ["Важно", "Ссылки Яндекс Диска для Спортмастера не подходят", "Они обычно не содержат расширение файла"],
+    ["Важно", "Если ссылка не прямая, сервис оставит предупреждение в отчёте", "Лучше сразу давать готовые URL на файл"],
+    ["Пример", "https://ltdfoto.ru/images/2024/01/17/120140FLA-WH221_4.jpg", "Корректная прямая ссылка"],
+  ];
+  styleHeader(sheet.getRange("A3:C3"));
+  styleNote(sheet.getRange("A4:C10"));
+  sheet.getRange("A1:C10").format.wrapText = true;
+  setColumnWidths(sheet, [90, 360, 320]);
+}
+
+function addDetmirLinksTemplateSheet(workbook) {
+  const sheet = workbook.worksheets.add("Ссылки Детский Мир");
+  setSheetFrame(sheet);
+
+  sheet.getRange("A1:C1").values = [["article", "Штрихкод товара", "Ссылки на фото"]];
+  styleTitle(sheet.getRange("A1:C1"));
+
+  sheet.getRange("A2:C4").values = [
+    [
+      "TSR-10025",
+      "4607000012345",
+      "https://static.detmir.st/media_out/523/698/3698523/1500/0.jpg\nhttps://static.detmir.st/media_out/523/698/3698523/1500/1.jpg",
+    ],
+    [
+      "TSR-10026",
+      "4607000012346",
+      "https://disk.yandex.ru/d/example-public-link",
+    ],
+    ["", "", ""],
+  ];
+  styleExample(sheet.getRange("A2:C3"));
+  setColumnWidths(sheet, [180, 220, 700]);
+  sheet.getRange("A1:C20").format.wrapText = true;
+}
+
+function addDetmirLinksReadmeSheet(workbook) {
+  const sheet = workbook.worksheets.add("Как собрать файл");
+  sheet.getRange("A1:C1").values = [["Готовые ссылки для Детского Мира", null, null]];
+  sheet.getRange("A1:C1").merge();
+  styleTitle(sheet.getRange("A1:C1"));
+  sheet.getRange("A3:C10").values = [
+    ["Пункт", "Что делать", "Комментарий"],
+    ["1", "Заполнить Штрихкод товара и Ссылки на фото", "Парсинг и скачивание не нужны"],
+    ["2", "Можно вставлять прямые ссылки на изображения или публичные ссылки Яндекс Диска", "Несколько ссылок допускаются"],
+    ["3", "Разделители: перевод строки, пробел, запятая или ;", "Сервис соберёт единый Excel-файл"],
+    ["4", "Загрузить файл в блок Готовые ссылки без парсинга", "Сервис соберёт итоговый Excel"],
+    ["Ограничение", "Максимум 30 изображений на товар", "Лишние будут отброшены с предупреждением"],
+    ["Важно", "Размер каждого файла должен быть до 1 МБ", "Сервис только формирует файл со ссылками, а не пережимает удалённые файлы"],
+    ["Пример", "https://static.detmir.st/media_out/523/698/3698523/1500/0.jpg", "Корректная прямая ссылка"],
+  ];
+  styleHeader(sheet.getRange("A3:C3"));
+  styleNote(sheet.getRange("A4:C10"));
+  sheet.getRange("A1:C10").format.wrapText = true;
+  setColumnWidths(sheet, [90, 360, 320]);
+}
+
 await fs.mkdir(outputDir, { recursive: true });
 
 const managerTemplate = Workbook.create();
@@ -213,6 +306,14 @@ const detmirTemplate = Workbook.create();
 addDetmirTemplateSheet(detmirTemplate);
 addDetmirReadmeSheet(detmirTemplate);
 
+const sportmasterLinksTemplate = Workbook.create();
+addSportmasterLinksTemplateSheet(sportmasterLinksTemplate);
+addSportmasterLinksReadmeSheet(sportmasterLinksTemplate);
+
+const detmirLinksTemplate = Workbook.create();
+addDetmirLinksTemplateSheet(detmirLinksTemplate);
+addDetmirLinksReadmeSheet(detmirLinksTemplate);
+
 const managerFile = await SpreadsheetFile.exportXlsx(managerTemplate);
 await managerFile.save(path.join(outputDir, "manager_import_template.xlsx"));
 
@@ -224,5 +325,11 @@ await sportmasterFile.save(path.join(outputDir, "sportmaster_upload_template.xls
 
 const detmirFile = await SpreadsheetFile.exportXlsx(detmirTemplate);
 await detmirFile.save(path.join(outputDir, "detmir_upload_template.xlsx"));
+
+const sportmasterLinksFile = await SpreadsheetFile.exportXlsx(sportmasterLinksTemplate);
+await sportmasterLinksFile.save(path.join(outputDir, "sportmaster_links_template.xlsx"));
+
+const detmirLinksFile = await SpreadsheetFile.exportXlsx(detmirLinksTemplate);
+await detmirLinksFile.save(path.join(outputDir, "detmir_links_template.xlsx"));
 
 console.log("Templates exported to", outputDir);
