@@ -459,14 +459,15 @@ def prepare_remote_image_for_client(
             "jpg" if "jpg" in allowed_extensions else sorted(allowed_extensions)[0]
         )
 
-        working_image = image.convert("RGB") if target_extension in {"jpg", "jpeg"} else image.copy()
-        long_side = max(working_image.size)
         min_long_side = profile.get("min_long_side_px")
         max_long_side = profile.get("max_long_side_px")
-        if min_long_side and long_side < min_long_side:
-            warnings.append(f"Изображение меньше рекомендуемой длинной стороны {min_long_side}px")
-        if max_long_side and long_side > max_long_side:
-            working_image.thumbnail((max_long_side, max_long_side))
+        working_image = image.convert("RGB") if target_extension in {"jpg", "jpeg"} else image.copy()
+        working_image = normalize_image_long_side(
+            working_image,
+            min_long_side_px=min_long_side,
+            max_long_side_px=max_long_side,
+            warnings=warnings,
+        )
 
         max_file_size_mb = profile.get("max_file_size_mb")
         max_file_size_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else None
@@ -475,6 +476,7 @@ def prepare_remote_image_for_client(
             target_extension,
             allowed_extensions,
             max_file_size_bytes,
+            min_long_side_px=min_long_side,
         )
         if max_file_size_bytes and len(file_bytes) > max_file_size_bytes:
             warnings.append(f"Файл превышает лимит {max_file_size_mb} МБ")
@@ -515,13 +517,12 @@ def prepare_image_for_client(file_path: Path, profile: dict[str, Any]) -> tuple[
 
     with Image.open(file_path) as image:
         image = image.convert("RGB") if target_extension in {"jpg", "jpeg"} else image.copy()
-        long_side = max(image.size)
-        if min_long_side and long_side < min_long_side:
-            warnings.append(f"Изображение меньше рекомендуемой длинной стороны {min_long_side}px")
-        if max_long_side and long_side > max_long_side:
-            image.thumbnail((max_long_side, max_long_side))
-
-        image_for_export = image.copy()
+        image_for_export = normalize_image_long_side(
+            image,
+            min_long_side_px=min_long_side,
+            max_long_side_px=max_long_side,
+            warnings=warnings,
+        )
 
     max_file_size_mb = profile.get("max_file_size_mb")
     max_file_size_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else None
@@ -530,10 +531,38 @@ def prepare_image_for_client(file_path: Path, profile: dict[str, Any]) -> tuple[
         target_extension,
         allowed_extensions,
         max_file_size_bytes,
+        min_long_side_px=min_long_side,
     )
     if max_file_size_bytes and len(file_bytes) > max_file_size_bytes:
         warnings.append(f"Файл превышает лимит {max_file_size_mb} МБ")
     return file_bytes, target_extension, warnings
+
+
+def normalize_image_long_side(
+    image: Image.Image,
+    *,
+    min_long_side_px: int | None,
+    max_long_side_px: int | None,
+    warnings: list[str],
+) -> Image.Image:
+    working_image = image.copy()
+    long_side = max(working_image.size)
+
+    if min_long_side_px and long_side < min_long_side_px:
+        scale = min_long_side_px / long_side
+        new_size = (
+            max(int(round(working_image.size[0] * scale)), 1),
+            max(int(round(working_image.size[1] * scale)), 1),
+        )
+        working_image = working_image.resize(new_size, Image.Resampling.LANCZOS)
+        warnings.append(f"Длинная сторона увеличена до минимально допустимых {min_long_side_px}px")
+        long_side = max(working_image.size)
+
+    if max_long_side_px and long_side > max_long_side_px:
+        working_image.thumbnail((max_long_side_px, max_long_side_px), Image.Resampling.LANCZOS)
+        warnings.append(f"Длинная сторона уменьшена до максимально допустимых {max_long_side_px}px")
+
+    return working_image
 
 
 def serialize_image_for_client(
@@ -541,6 +570,7 @@ def serialize_image_for_client(
     target_extension: str,
     allowed_extensions: set[str],
     max_file_size_bytes: int | None,
+    min_long_side_px: int | None = None,
 ) -> tuple[bytes, str]:
     strategies: list[str] = []
     if target_extension in {"jpg", "jpeg"}:
@@ -571,12 +601,20 @@ def serialize_image_for_client(
                 best_extension = extension
             if not max_file_size_bytes or len(candidate_bytes) <= max_file_size_bytes:
                 return candidate_bytes, extension
-        if not max_file_size_bytes or max(working_image.size) <= 1000:
+        min_allowed_long_side = int(min_long_side_px) if min_long_side_px else 1000
+        if not max_file_size_bytes or max(working_image.size) <= min_allowed_long_side:
             return best_bytes, best_extension
 
         # If the file is still too large, gently scale it down and try again.
         new_width = max(int(working_image.size[0] * 0.9), 1)
         new_height = max(int(working_image.size[1] * 0.9), 1)
+        if min_long_side_px:
+            current_long_side = max(working_image.size)
+            proposed_long_side = max(new_width, new_height)
+            if current_long_side > min_long_side_px and proposed_long_side < min_long_side_px:
+                scale = min_long_side_px / current_long_side
+                new_width = max(int(round(working_image.size[0] * scale)), 1)
+                new_height = max(int(round(working_image.size[1] * scale)), 1)
         if (new_width, new_height) == working_image.size:
             return best_bytes, best_extension
         working_image = working_image.resize((new_width, new_height))
